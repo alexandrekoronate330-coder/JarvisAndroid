@@ -110,47 +110,28 @@ public class MainActivity extends Activity {
 
     private void startListening() {
         if (started) return;
-        if (ACCESS_KEY.startsWith("COLE_")) {
-            writeLog("Falta a AccessKey da Picovoice. Veja o README incluído no projeto.");
-            speak("Falta configurar a chave de ativação.");
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                new String[]{Manifest.permission.RECORD_AUDIO}, 10);
             return;
         }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 10);
-            return;
-        }
-        try {
-            PorcupineManagerCallback callback = keywordIndex -> runOnUiThread(() -> {
-                if (listeningForCommand || !started) return;
-                listeningForCommand = true;
-                status.setText("Chamado. Ouvindo comando...");
-                writeLog("Palavra de ativação detectada.");
-                speak("Pode falar.");
-                handler.postDelayed(this::listenForCommand, 450);
-            });
-            porcupineManager = new PorcupineManager.Builder()
-                    .setAccessKey(ACCESS_KEY)
-                    .setKeyword(Porcupine.BuiltInKeyword.JARVIS)
-                    .setSensitivity(0.65f)
-                    .build(this, callback);
-            porcupineManager.start();
-            started = true;
-            startButton.setEnabled(false);
-            stopButton.setEnabled(true);
-            status.setText("Aguardando: diga Jarvis");
-            writeLog("Escuta iniciada. Diga “Jarvis” para chamar.");
-        } catch (PorcupineException e) {
-            writeLog("Não foi possível iniciar o detector: " + e.getMessage());
-            status.setText("Falha ao iniciar");
-        }
+
+        started = true;
+        listeningForCommand = true;
+        startButton.setEnabled(false);
+        stopButton.setEnabled(true);
+        status.setText("Preparando microfone...");
+        writeLog("Iniciando escuta por comando.");
+        handler.postDelayed(this::listenForCommand, 200);
     }
 
     private void listenForCommand() {
         if (!started) { listeningForCommand = false; return; }
         if (!SpeechRecognizer.isRecognitionAvailable(this)) {
             writeLog("Reconhecimento de fala indisponível.");
-            listeningForCommand = false;
-            status.setText("Aguardando: diga Jarvis");
+            resumeWakeWord();
             return;
         }
         if (speechRecognizer != null) {
@@ -219,7 +200,17 @@ public class MainActivity extends Activity {
 
     private void resumeWakeWord() {
         listeningForCommand = false;
-        if (started) status.setText("Aguardando: diga Jarvis");
+        started = false;
+
+        if (speechRecognizer != null) {
+            speechRecognizer.destroy();
+            speechRecognizer = null;
+        }
+
+        startButton.setEnabled(true);
+        stopButton.setEnabled(false);
+        status.setText("Pronto. Aperte Iniciar escuta para falar.");
+        writeLog("Escuta encerrada. Aperte Iniciar escuta para outro comando.");
     }
 
     private void speak(String text) {
