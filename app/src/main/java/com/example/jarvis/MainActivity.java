@@ -106,6 +106,13 @@ public class MainActivity extends Activity {
 
         startButton.setOnClickListener(v -> startListening());
         stopButton.setOnClickListener(v -> stopListening());
+
+        Button mangaButton = new Button(this);
+        mangaButton.setText("Criar mangá");
+        layout.addView(mangaButton,
+            new LinearLayout.LayoutParams(-1, -2));
+        mangaButton.setOnClickListener(v ->
+            startActivity(new Intent(MainActivity.this, MangaActivity.class)));
     }
 
     private void startListening() {
