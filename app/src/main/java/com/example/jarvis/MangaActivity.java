@@ -11,6 +11,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.content.SharedPreferences;
+import android.content.Intent;
 import android.speech.tts.TextToSpeech;
 import android.widget.Toast;
 
@@ -30,6 +31,7 @@ public class MangaActivity extends Activity {
     private boolean ttsReady = false;
     private JSONObject projects = new JSONObject();
     private String currentTitle = "";
+    private float chapterTextSize = 16f;
 
     private int dp(int n) {
         return (int) (n * getResources().getDisplayMetrics().density + 0.5f);
@@ -152,6 +154,29 @@ public class MangaActivity extends Activity {
         layout.addView(showChapters);
         showChapters.setOnClickListener(v -> showChapters());
 
+        addSectionTitle("LEITURA E PUBLICAÇÃO");
+        TextView sizeLabel = new TextView(this);
+        sizeLabel.setText("Tamanho do texto: ajuste para ler sem dar zoom");
+        sizeLabel.setTextColor(Color.WHITE);
+        sizeLabel.setTextSize(15);
+        layout.addView(sizeLabel);
+        LinearLayout sizeRow = new LinearLayout(this);
+        sizeRow.setOrientation(LinearLayout.HORIZONTAL);
+        Button smallerText = button("A− Menor");
+        Button normalText = button("A Normal");
+        Button largerText = button("A+ Maior");
+        sizeRow.addView(smallerText, new LinearLayout.LayoutParams(0, -2, 1));
+        sizeRow.addView(normalText, new LinearLayout.LayoutParams(0, -2, 1));
+        sizeRow.addView(largerText, new LinearLayout.LayoutParams(0, -2, 1));
+        layout.addView(sizeRow);
+        smallerText.setOnClickListener(v -> adjustChapterTextSize(-2f));
+        normalText.setOnClickListener(v -> setChapterTextSize(16f));
+        largerText.setOnClickListener(v -> adjustChapterTextSize(2f));
+
+        Button shareChapter = button("📤 Exportar / compartilhar capítulo");
+        layout.addView(shareChapter);
+        shareChapter.setOnClickListener(v -> shareCurrentChapter());
+
         Button saveProject = button("Salvar dados do mangá");
         layout.addView(saveProject);
         saveProject.setOnClickListener(v -> saveProjectData());
@@ -168,7 +193,7 @@ public class MangaActivity extends Activity {
 
         result = new TextView(this);
         result.setTextColor(Color.WHITE);
-        result.setTextSize(16);
+        result.setTextSize(chapterTextSize);
         result.setPadding(0, dp(16), 0, dp(16));
         layout.addView(result);
 
@@ -554,6 +579,46 @@ public class MangaActivity extends Activity {
                     showMessage("Erro ao atualizar capítulo.");
                 }
             }).show();
+    }
+
+    private void adjustChapterTextSize(float delta) {
+        setChapterTextSize(chapterTextSize + delta);
+    }
+
+    private void setChapterTextSize(float size) {
+        chapterTextSize = Math.max(12f, Math.min(30f, size));
+        if (result != null) result.setTextSize(chapterTextSize);
+        Toast.makeText(this, "Tamanho do texto: " + (int) chapterTextSize, Toast.LENGTH_SHORT).show();
+    }
+
+    private void shareCurrentChapter() {
+        JSONObject p = currentProject();
+        if (p == null) {
+            showMessage("Abra um mangá primeiro.");
+            return;
+        }
+        JSONArray chapters = chapterArray(p);
+        if (chapters.length() == 0) {
+            showMessage("Salve pelo menos um capítulo antes de exportar.");
+            return;
+        }
+        JSONObject chapter = chapters.optJSONObject(chapters.length() - 1);
+        if (chapter == null) {
+            showMessage("Não consegui ler o último capítulo.");
+            return;
+        }
+        String exportText = p.optString("title", currentTitle) + "\n" +
+            chapter.optString("title", "Capítulo") + "\n\n" +
+            chapter.optString("text", "");
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_SUBJECT, p.optString("title", currentTitle) + " - " + chapter.optString("title", "Capítulo"));
+        send.putExtra(Intent.EXTRA_TEXT, exportText);
+        try {
+            startActivity(Intent.createChooser(send, "Compartilhar capítulo"));
+        } catch (Exception e) {
+            showMessage("Não foi possível abrir o menu de compartilhamento.");
+        }
     }
 
     private void saveProjectData() {
