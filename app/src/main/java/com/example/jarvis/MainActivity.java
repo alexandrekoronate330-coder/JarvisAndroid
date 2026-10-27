@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -19,6 +21,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import java.io.InputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -74,10 +77,20 @@ public class MainActivity extends Activity {
         layout.addView(title,
                 new LinearLayout.LayoutParams(-1, -2));
 
-        // IMAGEM DO JARVIS
+        // Avatar carregado da pasta assets
         ImageView avatar = new ImageView(this);
-        avatar.setImageResource(R.drawable.jarvis_avatar);
         avatar.setScaleType(ImageView.ScaleType.FIT_CENTER);
+
+        try (InputStream input = getAssets().open("jarvis_avatar.png")) {
+            Bitmap bitmap = BitmapFactory.decodeStream(input);
+            if (bitmap != null) {
+                avatar.setImageBitmap(bitmap);
+            } else {
+                writeLog("Não foi possível carregar a imagem do Jarvis.");
+            }
+        } catch (Exception e) {
+            writeLog("Imagem não encontrada em assets/jarvis_avatar.png");
+        }
 
         LinearLayout.LayoutParams imageParams =
                 new LinearLayout.LayoutParams(240, 240);
@@ -338,6 +351,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
         stopListening();
 
         if (tts != null) {
