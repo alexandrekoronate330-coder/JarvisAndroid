@@ -2,6 +2,7 @@
 package com.example.jarvis;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.os.Bundle;
 import android.graphics.Color;
 import android.view.Gravity;
@@ -20,7 +21,9 @@ import org.json.JSONObject;
 import java.util.Locale;
 
 public class MangaActivity extends Activity {
-    private EditText titleInput, genreInput, characterInput, ideaInput, editCharacterInput;
+    private EditText titleInput, genreInput, characterInput;
+    private EditText ideaInput, editCharacterInput;
+    private EditText chapterTitleInput, chapterTextInput;
     private TextView result;
     private LinearLayout layout, projectsContainer;
     private SharedPreferences prefs;
@@ -74,7 +77,6 @@ public class MangaActivity extends Activity {
         });
 
         ScrollView scroll = new ScrollView(this);
-
         layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(dp(20), dp(24), dp(20), dp(24));
@@ -89,7 +91,7 @@ public class MangaActivity extends Activity {
         layout.addView(heading);
 
         TextView intro = new TextView(this);
-        intro.setText("Crie vários mangás e continue cada história pelo título.");
+        intro.setText("Crie mangás, salve capítulos e personalize personagens.");
         intro.setTextColor(Color.WHITE);
         intro.setTextSize(16);
         intro.setPadding(0, dp(12), 0, dp(12));
@@ -107,30 +109,48 @@ public class MangaActivity extends Activity {
         refreshProjectList();
 
         titleInput = field("Título do mangá", 1);
-        genreInput = field("Gênero: fantasia, ação, isekai...", 1);
-        characterInput = field("Personagens e aparência", 3);
-        ideaInput = field("Ideia da história", 4);
-        editCharacterInput = field(
-            "Descreva como quer mudar o personagem", 3
-        );
+        genreInput = field("Gênero e estilo visual", 1);
+        characterInput = field("Personagens e aparência atual", 3);
+        ideaInput = field("Ideia e resumo da história", 4);
+        editCharacterInput = field("Descreva como quer mudar o personagem", 3);
+        chapterTitleInput = field("Título do capítulo", 1);
+        chapterTextInput = field("Escreva aqui o capítulo completo", 8);
 
         layout.addView(titleInput);
         layout.addView(genreInput);
         layout.addView(characterInput);
         layout.addView(ideaInput);
+
+        Button create = button("Criar novo / abrir pelo título");
+        layout.addView(create);
+        create.setOnClickListener(v -> openOrCreateProject());
+
+        addSectionTitle("PERSONAGENS");
         layout.addView(editCharacterInput);
 
-        Button openOrCreate = button("Criar novo / abrir pelo título");
-        layout.addView(openOrCreate);
-        openOrCreate.setOnClickListener(v -> openOrCreateProject());
+        Button updateCharacter = button("Salvar descrição do personagem");
+        layout.addView(updateCharacter);
+        updateCharacter.setOnClickListener(v -> updateCharacter());
 
-        Button editCharacter = button("Salvar mudanças do personagem");
-        layout.addView(editCharacter);
-        editCharacter.setOnClickListener(v -> applyCharacterDescription());
+        addSectionTitle("CAPÍTULOS");
+        layout.addView(chapterTitleInput);
+        layout.addView(chapterTextInput);
 
-        Button save = button("Salvar capítulo e progresso");
-        layout.addView(save);
-        save.setOnClickListener(v -> saveProgress());
+        Button saveChapter = button("Salvar capítulo");
+        layout.addView(saveChapter);
+        saveChapter.setOnClickListener(v -> saveChapter());
+
+        Button newChapter = button("Preparar próximo capítulo");
+        layout.addView(newChapter);
+        newChapter.setOnClickListener(v -> prepareNextChapter());
+
+        Button showChapters = button("Ver capítulos salvos");
+        layout.addView(showChapters);
+        showChapters.setOnClickListener(v -> showChapters());
+
+        Button saveProject = button("Salvar dados do mangá");
+        layout.addView(saveProject);
+        saveProject.setOnClickListener(v -> saveProjectData());
 
         Button narrate = button("▶ Ativar narração");
         layout.addView(narrate);
@@ -155,6 +175,15 @@ public class MangaActivity extends Activity {
         setContentView(scroll);
     }
 
+    private void addSectionTitle(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(0xFF7DE3FF);
+        t.setTextSize(19);
+        t.setPadding(0, dp(20), 0, dp(6));
+        layout.addView(t);
+    }
+
     private void loadProjectsFromStorage() {
         try {
             projects = new JSONObject(
@@ -168,6 +197,36 @@ public class MangaActivity extends Activity {
     private void persistProjects() {
         prefs.edit().putString("projects_json", projects.toString()).apply();
         refreshProjectList();
+    }
+
+    private JSONObject currentProject() {
+        if (currentTitle.isEmpty()) return null;
+        return projects.optJSONObject(currentTitle);
+    }
+
+    private JSONArray chapterArray(JSONObject p) {
+        JSONArray chapters = p.optJSONArray("chapters");
+        if (chapters == null) {
+            chapters = new JSONArray();
+            String oldText = p.optString("chapter_text", "");
+
+            if (!oldText.isEmpty()) {
+                try {
+                    JSONObject old = new JSONObject();
+                    old.put("number", p.optInt("chapter", 1));
+                    old.put("title", "Capítulo anterior");
+                    old.put("text", oldText);
+                    chapters.put(old);
+                } catch (Exception ignored) {
+                }
+            }
+
+            try {
+                p.put("chapters", chapters);
+            } catch (Exception ignored) {
+            }
+        }
+        return chapters;
     }
 
     private void refreshProjectList() {
@@ -186,9 +245,48 @@ public class MangaActivity extends Activity {
 
         for (int i = 0; i < names.length(); i++) {
             String name = names.optString(i);
-            Button b = button("📖 " + name);
-            projectsContainer.addView(b);
-            b.setOnClickListener(v -> loadProject(name));
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+
+            Button open = button("📖 " + name);
+            Button delete = button("🗑️");
+
+            row.addView(open, new LinearLayout.LayoutParams(0, -2, 1));
+            row.addView(delete, new LinearLayout.LayoutParams(-2, -2));
+            projectsContainer.addView(row);
+
+            open.setOnClickListener(v -> loadProject(name));
+
+            delete.setOnClickListener(v -> new AlertDialog.Builder(this)
+                .setTitle("Apagar mangá?")
+                .setMessage(
+                    "Deseja apagar \"" + name +
+                    "\" e todos os seus capítulos? Esta ação não pode ser desfeita."
+                )
+                .setNegativeButton("Cancelar", (dialog, which) -> dialog.dismiss())
+                .setPositiveButton("Apagar", (dialog, which) -> {
+                    projects.remove(name);
+
+                    if (name.equals(currentTitle)) {
+                        currentTitle = "";
+                        titleInput.setText("");
+                        genreInput.setText("");
+                        characterInput.setText("");
+                        ideaInput.setText("");
+                        editCharacterInput.setText("");
+                        chapterTitleInput.setText("");
+                        chapterTextInput.setText("");
+                        result.setText("Mangá apagado.");
+                    }
+
+                    persistProjects();
+                    Toast.makeText(
+                        this, "Mangá apagado.", Toast.LENGTH_SHORT
+                    ).show();
+                })
+                .show());
         }
     }
 
@@ -196,21 +294,19 @@ public class MangaActivity extends Activity {
         String title = value(titleInput);
 
         if (title.isEmpty()) {
-            result.setText("Digite o título do mangá.");
+            showMessage("Digite o título do mangá.");
             return;
         }
 
         if (projects.has(title)) {
             loadProject(title);
-            Toast.makeText(
-                this, "História aberta!", Toast.LENGTH_SHORT
-            ).show();
+            Toast.makeText(this, "História aberta!", Toast.LENGTH_SHORT).show();
             return;
         }
 
         String idea = value(ideaInput);
         if (idea.isEmpty()) {
-            result.setText("Para criar um mangá novo, escreva a ideia da história.");
+            showMessage("Escreva a ideia para criar um mangá novo.");
             return;
         }
 
@@ -221,8 +317,8 @@ public class MangaActivity extends Activity {
                 ? "Aventura e fantasia" : value(genreInput));
             p.put("characters", value(characterInput));
             p.put("idea", idea);
-            p.put("chapter", 1);
-            p.put("chapter_text", "CAPÍTULO 1\n\n" + idea);
+            p.put("chapter", 0);
+            p.put("chapters", new JSONArray());
             p.put("character_versions", new JSONArray());
 
             projects.put(title, p);
@@ -230,11 +326,9 @@ public class MangaActivity extends Activity {
             persistProjects();
             showProject(p);
 
-            Toast.makeText(
-                this, "Novo mangá salvo!", Toast.LENGTH_SHORT
-            ).show();
+            Toast.makeText(this, "Novo mangá salvo!", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
-            result.setText("Não foi possível salvar o projeto.");
+            showMessage("Não foi possível criar o projeto.");
         }
     }
 
@@ -248,114 +342,185 @@ public class MangaActivity extends Activity {
         characterInput.setText(p.optString("characters", ""));
         ideaInput.setText(p.optString("idea", ""));
         editCharacterInput.setText("");
+        chapterTitleInput.setText("");
+        chapterTextInput.setText("");
 
+        chapterArray(p);
+        persistProjects();
         showProject(p);
     }
 
     private void showProject(JSONObject p) {
+        JSONArray chapters = chapterArray(p);
         result.setText(
-            "PROJETO SALVO\n\n" +
+            "PROJETO ABERTO\n\n" +
             "Título: " + p.optString("title", "") + "\n" +
-            "Gênero: " + p.optString("genre", "") + "\n" +
-            "Capítulo atual: " + p.optInt("chapter", 1) + "\n\n" +
+            "Gênero/estilo: " + p.optString("genre", "") + "\n" +
+            "Capítulos salvos: " + chapters.length() + "\n\n" +
             "PERSONAGENS\n" + p.optString("characters", "Não definidos.") +
             "\n\nIDEIA DA HISTÓRIA\n" + p.optString("idea", "") +
-            "\n\nCAPÍTULOS SALVOS\n" + p.optString("chapter_text", "") +
-            "\n\nO projeto está salvo neste celular. A geração automática " +
-            "por IA e as ilustrações ainda precisam de integração com um serviço de IA."
+            "\n\nUse 'Ver capítulos salvos' para consultar os capítulos."
         );
     }
 
-    private void applyCharacterDescription() {
-        if (currentTitle.isEmpty()) {
-            result.setText("Primeiro crie ou abra um mangá.");
+    private void updateCharacter() {
+        JSONObject p = currentProject();
+        if (p == null) {
+            showMessage("Primeiro crie ou abra um mangá.");
             return;
         }
 
         String description = value(editCharacterInput);
         if (description.isEmpty()) {
-            result.setText("Descreva as mudanças que deseja.");
+            showMessage("Descreva as mudanças desejadas.");
             return;
         }
 
-        JSONObject p = projects.optJSONObject(currentTitle);
-        if (p == null) return;
-
-        String characters = p.optString("characters", "");
-        if (!characters.isEmpty()) characters += "\n\n";
-        characters += "Alteração solicitada: " + description;
-
         try {
-            p.put("characters", characters);
-
             JSONArray versions = p.optJSONArray("character_versions");
             if (versions == null) versions = new JSONArray();
-            versions.put(description);
+
+            JSONObject version = new JSONObject();
+            version.put("description", description);
+            version.put("date", System.currentTimeMillis());
+            versions.put(version);
             p.put("character_versions", versions);
-        } catch (Exception ignored) {
-        }
 
-        characterInput.setText(characters);
-        editCharacterInput.setText("");
-        persistProjects();
-        showProject(p);
+            String updated = value(characterInput);
+            if (!updated.isEmpty()) updated += "\n\n";
+            updated += "Alteração solicitada: " + description;
 
-        Toast.makeText(
-            this, "Descrição do personagem salva!", Toast.LENGTH_SHORT
-        ).show();
-    }
-
-    private void saveProgress() {
-        if (currentTitle.isEmpty()) {
-            result.setText("Primeiro crie ou abra um mangá.");
-            return;
-        }
-
-        JSONObject p = projects.optJSONObject(currentTitle);
-        if (p == null) return;
-
-        String idea = value(ideaInput);
-        String characters = value(characterInput);
-        String genre = value(genreInput);
-
-        try {
-            p.put("genre", genre.isEmpty()
-                ? "Aventura e fantasia" : genre);
-            p.put("characters", characters);
-
-            if (!idea.isEmpty()) p.put("idea", idea);
-
-            // Salva o texto atual sem inventar um capítulo novo.
-            p.put("chapter_text",
-                "CAPÍTULO " + p.optInt("chapter", 1) + "\n\n" +
-                p.optString("idea", ""));
+            p.put("characters", updated);
+            characterInput.setText(updated);
+            editCharacterInput.setText("");
 
             persistProjects();
             showProject(p);
-
             Toast.makeText(
-                this, "Progresso salvo!", Toast.LENGTH_SHORT
+                this, "Descrição salva. A imagem ainda não foi regenerada.",
+                Toast.LENGTH_LONG
             ).show();
         } catch (Exception e) {
-            result.setText("Erro ao salvar o progresso.");
+            showMessage("Erro ao salvar a descrição.");
+        }
+    }
+
+    private void saveChapter() {
+        JSONObject p = currentProject();
+        if (p == null) {
+            showMessage("Primeiro crie ou abra um mangá.");
+            return;
+        }
+
+        String text = value(chapterTextInput);
+        if (text.isEmpty()) {
+            showMessage("Escreva o capítulo antes de salvar.");
+            return;
+        }
+
+        try {
+            JSONArray chapters = chapterArray(p);
+            String title = value(chapterTitleInput);
+            if (title.isEmpty()) title = "Capítulo " + (chapters.length() + 1);
+
+            JSONObject chapter = new JSONObject();
+            chapter.put("number", chapters.length() + 1);
+            chapter.put("title", title);
+            chapter.put("text", text);
+            chapter.put("savedAt", System.currentTimeMillis());
+            chapters.put(chapter);
+
+            p.put("chapters", chapters);
+            p.put("chapter", chapters.length());
+            p.put("chapter_text", text);
+
+            persistProjects();
+            chapterTitleInput.setText("");
+            chapterTextInput.setText("");
+            showProject(p);
+
+            Toast.makeText(this, "Capítulo salvo!", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            showMessage("Não foi possível salvar o capítulo.");
+        }
+    }
+
+    private void prepareNextChapter() {
+        JSONObject p = currentProject();
+        if (p == null) {
+            showMessage("Primeiro crie ou abra um mangá.");
+            return;
+        }
+
+        int next = chapterArray(p).length() + 1;
+        chapterTitleInput.setText("Capítulo " + next);
+        chapterTextInput.setText("");
+        showMessage(
+            "Escreva o capítulo " + next + " e toque em Salvar capítulo."
+        );
+    }
+
+    private void showChapters() {
+        JSONObject p = currentProject();
+        if (p == null) {
+            showMessage("Primeiro crie ou abra um mangá.");
+            return;
+        }
+
+        JSONArray chapters = chapterArray(p);
+        if (chapters.length() == 0) {
+            showMessage("Este mangá ainda não tem capítulos salvos.");
+            return;
+        }
+
+        StringBuilder out = new StringBuilder("CAPÍTULOS SALVOS\n\n");
+
+        for (int i = 0; i < chapters.length(); i++) {
+            JSONObject c = chapters.optJSONObject(i);
+            if (c == null) continue;
+
+            out.append("CAPÍTULO ")
+                .append(c.optInt("number", i + 1))
+                .append(": ")
+                .append(c.optString("title", "Sem título"))
+                .append("\n\n")
+                .append(c.optString("text", ""))
+                .append("\n\n--------------------\n\n");
+        }
+
+        result.setText(out.toString());
+    }
+
+    private void saveProjectData() {
+        JSONObject p = currentProject();
+        if (p == null) {
+            showMessage("Primeiro crie ou abra um mangá.");
+            return;
+        }
+
+        try {
+            p.put("genre", value(genreInput));
+            p.put("characters", value(characterInput));
+            p.put("idea", value(ideaInput));
+
+            persistProjects();
+            showProject(p);
+            Toast.makeText(
+                this, "Dados do mangá salvos!", Toast.LENGTH_SHORT
+            ).show();
+        } catch (Exception e) {
+            showMessage("Erro ao salvar o projeto.");
         }
     }
 
     private void startNarration() {
-        if (result == null ||
-            result.getText().toString().trim().isEmpty()) {
-            Toast.makeText(
-                this, "Abra um mangá antes de ativar a narração.",
-                Toast.LENGTH_SHORT
-            ).show();
+        if (result == null || result.getText().toString().trim().isEmpty()) {
+            showMessage("Abra um mangá ou capítulo antes de narrar.");
             return;
         }
 
         if (!ttsReady || tts == null) {
-            Toast.makeText(
-                this, "A voz ainda está carregando ou não está disponível.",
-                Toast.LENGTH_SHORT
-            ).show();
+            showMessage("A voz ainda está carregando ou não está disponível.");
             return;
         }
 
@@ -365,6 +530,14 @@ public class MangaActivity extends Activity {
             null,
             "jarvis_manga_narration"
         );
+    }
+
+    private void showMessage(String message) {
+        if (result != null) {
+            result.setText(message);
+        } else {
+            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+        }
     }
 
     @Override
