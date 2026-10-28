@@ -553,7 +553,7 @@ public class MangaActivity extends Activity {
                 connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
 
                 JSONObject request = new JSONObject();
-                request.put("model", "llama-3.3-70b-versatile");
+                request.put("model", "openai/gpt-oss-20b");
                 request.put("temperature", 0.85);
                 request.put("max_tokens", 4500);
                 JSONArray messages = new JSONArray();
