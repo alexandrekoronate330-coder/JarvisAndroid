@@ -19,6 +19,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.util.Locale;
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 
 public class MangaActivity extends Activity {
     private EditText titleInput, genreInput, characterInput;
@@ -146,9 +153,13 @@ public class MangaActivity extends Activity {
         layout.addView(newChapter);
         newChapter.setOnClickListener(v -> prepareNextChapter());
 
-        Button generate = button("✨ Criar rascunho do próximo capítulo");
+        Button aiConfig = button("🔑 Configurar IA para criar capítulos");
+        layout.addView(aiConfig);
+        aiConfig.setOnClickListener(v -> configureAiKey());
+
+        Button generate = button("✨ Gerar capítulo com IA");
         layout.addView(generate);
-        generate.setOnClickListener(v -> generateLocalDraft());
+        generate.setOnClickListener(v -> generateAiChapter());
 
         Button showChapters = button("Ver / editar capítulos salvos");
         layout.addView(showChapters);
@@ -466,49 +477,179 @@ public class MangaActivity extends Activity {
         int next = chapterArray(p).length() + 1;
         chapterTitleInput.setText("Capítulo " + next);
         chapterTextInput.setText("");
-        showMessage("Escreva o capítulo " + next + " e toque em Salvar capítulo.");
+        showMessage("Toque em 'Gerar capítulo com IA' para criar o capítulo " + next + " usando a história-base salva.");
     }
 
-    private void generateLocalDraft() {
-        JSONObject p = currentProject();
-        if (p == null) {
-            showMessage("Primeiro crie ou abra um mangá.");
+    private void configureAiKey() {
+        EditText keyInput = field("Chave de API da Groq", 1);
+        keyInput.setSingleLine(true);
+        keyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT
+                | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        keyInput.setText(prefs.getString("groq_api_key", ""));
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+        TextView help = new TextView(this);
+        help.setText("Cole sua chave de API da Groq. Você pode criar/gerenciar a chave em console.groq.com. O serviço tem limites e regras próprias; não é garantido que todo uso seja gratuito.");
+        help.setTextColor(Color.WHITE);
+        help.setTextSize(14);
+        box.addView(help);
+        box.addView(keyInput);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Conectar IA de histórias")
+                .setView(box)
+                .setNegativeButton("Cancelar", null)
+                .setNeutralButton("Apagar chave", (d, w) -> {
+                    prefs.edit().remove("groq_api_key").apply();
+                    showMessage("Chave apagada deste aparelho.");
+                })
+                .setPositiveButton("Salvar chave", (d, w) -> {
+                    String key = keyInput.getText().toString().trim();
+                    if (key.isEmpty()) {
+                        showMessage("Cole uma chave válida.");
+                    } else {
+                        prefs.edit().putString("groq_api_key", key).apply();
+                        showMessage("Chave salva neste aparelho.");
+                    }
+                }).show();
+    }
+
+    private void generateAiChapter() {
+        JSONObject project = currentProject();
+        if (project == null) {
+            showMessage("Abra ou crie um mangá primeiro.");
             return;
         }
-        JSONArray chapters = chapterArray(p);
-        if (chapters.length() == 0) {
-            showMessage("Salve primeiro o capítulo 1. Depois posso usar ele como base.");
+        String base = project.optString("idea", "").trim();
+        if (base.isEmpty()) {
+            showMessage("A história-base salva está vazia. Preencha e salve os dados do mangá uma vez.");
             return;
         }
-        JSONObject last = chapters.optJSONObject(chapters.length() - 1);
-        if (last == null) {
-            showMessage("Não consegui ler o último capítulo.");
+        String apiKey = prefs.getString("groq_api_key", "").trim();
+        if (apiKey.isEmpty()) {
+            configureAiKey();
             return;
         }
+
+        JSONArray chapters = chapterArray(project);
         int number = chapters.length() + 1;
-        String lastTitle = last.optString("title", "Capítulo anterior");
-        String idea = p.optString("idea", "uma aventura inesperada");
-        String characters = p.optString("characters", "o protagonista");
-        chapterTitleInput.setText("Capítulo " + number + " - Novos caminhos");
-        String draft =
-            "CAPÍTULO " + number + " - NOVOS CAMINHOS\n\n" +
-            "Continuação de \"" + lastTitle + "\"\n\n" +
-            "[CENA 1: A CONSEQUÊNCIA]\n\n" +
-            "Os acontecimentos anteriores mudaram o rumo da jornada. Agora, cada escolha teria consequências.\n\n" +
-            "NARRADOR: A história estava longe de terminar. Um novo desafio começava a surgir no horizonte.\n\n" +
-            "[CENA 2: UMA DECISÃO]\n\n" +
-            "PERSONAGEM: \"Não podemos ignorar o que aconteceu. Precisamos descobrir a verdade.\"\n\n" +
-            "O grupo se reuniu para decidir o próximo passo. Entre dúvidas e esperanças, uma pista inesperada apareceu.\n\n" +
-            "[CENA 3: A PISTA]\n\n" +
-            characters + " percebeu que havia algo conectado à ideia central: " + idea + ".\n\n" +
-            "PERSONAGEM: \"Isso muda tudo. Estamos diante de algo muito maior.\"\n\n" +
-            "[CENA 4: GANCHO FINAL]\n\n" +
-            "Antes que alguém pudesse responder, um acontecimento inesperado interrompeu a conversa.\n\n" +
-            "NARRADOR: O próximo passo poderia revelar a verdade... ou colocar tudo a perder.\n\n" +
-            "[FIM DO RASCUNHO]\n\n" +
-            "IMPORTANTE: este rascunho é gerado localmente por regras, não por uma IA avançada. Revise para manter a continuidade exata.";
-        chapterTextInput.setText(draft);
-        showMessage("Rascunho criado. Revise e edite antes de salvar.");
+        String prompt = buildChapterPrompt(project, chapters, number);
+        chapterTitleInput.setText("Capítulo " + number);
+        chapterTextInput.setText("A IA está escrevendo o capítulo " + number + "...");
+        showMessage("Gerando capítulo " + number + " com IA...");
+
+        new Thread(() -> {
+            HttpURLConnection connection = null;
+            try {
+                URL url = new URL("https://api.groq.com/openai/v1/chat/completions");
+                connection = (HttpURLConnection) url.openConnection();
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(20000);
+                connection.setReadTimeout(90000);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+                connection.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+
+                JSONObject request = new JSONObject();
+                request.put("model", "llama-3.3-70b-versatile");
+                request.put("temperature", 0.85);
+                request.put("max_tokens", 4500);
+                JSONArray messages = new JSONArray();
+                JSONObject system = new JSONObject();
+                system.put("role", "system");
+                system.put("content", "Você é roteirista profissional de mangá e manhwa. Escreva em português brasileiro. Desenvolva capítulos completos com cenas, ações visuais e diálogos naturais identificados pelo nome dos personagens. Preserve a continuidade. Nunca peça para o usuário repetir a história-base. Termine com um gancho narrativo. Retorne apenas o capítulo pronto.");
+                messages.put(system);
+                JSONObject user = new JSONObject();
+                user.put("role", "user");
+                user.put("content", prompt);
+                messages.put(user);
+                request.put("messages", messages);
+
+                byte[] bytes = request.toString().getBytes(StandardCharsets.UTF_8);
+                try (OutputStream out = connection.getOutputStream()) { out.write(bytes); }
+                int status = connection.getResponseCode();
+                InputStream stream = (status >= 200 && status < 300)
+                        ? connection.getInputStream() : connection.getErrorStream();
+                StringBuilder response = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) response.append(line);
+                }
+                if (status < 200 || status >= 300) {
+                    String error = "Erro HTTP " + status;
+                    try {
+                        JSONObject errJson = new JSONObject(response.toString());
+                        JSONObject err = errJson.optJSONObject("error");
+                        if (err != null) error = err.optString("message", error);
+                    } catch (Exception ignored) { }
+                    final String message = error;
+                    runOnUiThread(() -> showMessage("A IA recusou a solicitação: " + message));
+                    return;
+                }
+                JSONObject json = new JSONObject(response.toString());
+                JSONArray choices = json.optJSONArray("choices");
+                JSONObject choice = choices == null ? null : choices.optJSONObject(0);
+                JSONObject msg = choice == null ? null : choice.optJSONObject("message");
+                String generated = msg == null ? "" : msg.optString("content", "").trim();
+                if (generated.isEmpty()) {
+                    runOnUiThread(() -> showMessage("A IA retornou texto vazio. Tente novamente."));
+                    return;
+                }
+                String generatedTitle = extractChapterTitle(generated, number);
+                runOnUiThread(() -> {
+                    chapterTitleInput.setText(generatedTitle);
+                    chapterTextInput.setText(generated);
+                    showMessage("Capítulo criado. Toque em 'Salvar capítulo novo' para guardar e depois gere o próximo.");
+                });
+            } catch (Exception e) {
+                String reason = e.getMessage() == null ? "falha de conexão" : e.getMessage();
+                runOnUiThread(() -> showMessage("Não consegui conectar à IA: " + reason + ". Confira a internet, a chave e a permissão INTERNET do aplicativo."));
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }).start();
+    }
+
+    private String buildChapterPrompt(JSONObject project, JSONArray chapters, int number) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("Escreva o capítulo ").append(number).append(" completo deste mangá. ");
+        prompt.append("Se não houver capítulo salvo, desenvolva a história-base como capítulo 1. ");
+        prompt.append("Se houver capítulos salvos, continue depois do último, sem reiniciar a trama nem repetir cenas. ");
+        prompt.append("Inclua título, cenas, descrições visuais úteis para os quadros, ações e falas identificadas pelo nome dos personagens. ");
+        prompt.append("Faça um capítulo substancial e termine com um gancho.\n\n");
+        prompt.append("TÍTULO: ").append(project.optString("title", currentTitle)).append("\n");
+        prompt.append("GÊNERO: ").append(project.optString("genre", "Aventura")).append("\n");
+        prompt.append("HISTÓRIA-BASE DO USUÁRIO: ").append(project.optString("idea", "")).append("\n");
+        prompt.append("PERSONAGENS E APARÊNCIA: ").append(project.optString("characters", "Ainda não definidos")).append("\n\n");
+        prompt.append("CAPÍTULOS ANTERIORES PARA CONTINUIDADE:\n");
+        int start = Math.max(0, chapters.length() - 3);
+        if (chapters.length() == 0) {
+            prompt.append("Nenhum capítulo salvo ainda. Este é o capítulo 1.\n");
+        } else {
+            for (int i = start; i < chapters.length(); i++) {
+                JSONObject c = chapters.optJSONObject(i);
+                if (c != null) {
+                    prompt.append("\n--- ").append(c.optString("title", "Capítulo " + (i + 1))).append(" ---\n");
+                    String text = c.optString("text", "");
+                    if (text.length() > 6500) text = text.substring(0, 6500);
+                    prompt.append(text).append("\n");
+                }
+            }
+        }
+        prompt.append("\nAgora escreva somente o capítulo ").append(number).append(" completo em português brasileiro.");
+        return prompt.toString();
+    }
+
+    private String extractChapterTitle(String text, int number) {
+        for (String line : text.split("\n")) {
+            String candidate = line.trim().replace("#", "").trim();
+            String lower = candidate.toLowerCase(Locale.ROOT);
+            if (!candidate.isEmpty() && candidate.length() <= 100
+                    && (lower.contains("capítulo") || lower.startsWith("episódio"))) return candidate;
+        }
+        return "Capítulo " + number;
     }
 
     private void showChapters() {
