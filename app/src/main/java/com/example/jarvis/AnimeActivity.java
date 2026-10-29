@@ -93,6 +93,7 @@ public class AnimeActivity extends Activity {
         button(layout, "GERAR EPISÓDIO COM IA", this::generateEpisode);
         button(layout, "VER / EDITAR EPISÓDIOS", this::showEpisodes);
         button(layout, "CONFIGURAR CHAVE DA IA", this::configureKey);
+        button(layout, "GERAR PRÉVIA DE VÍDEO (5 SEGUNDOS)", this::generateVideoPreview);
 
         status = new TextView(this);
         status.setTextColor(0xFF7DE3FF);
@@ -363,4 +364,151 @@ public class AnimeActivity extends Activity {
             .setNegativeButton("CANCELAR", null)
             .show();
     }
+
+    private void generateVideoPreview() {
+        EditText keyInput = new EditText(this);
+        keyInput.setHint("Chave da fal.ai");
+        keyInput.setSingleLine(true);
+        keyInput.setTextColor(Color.WHITE);
+
+        String savedKey = prefs.getString("fal_api_key", "").trim();
+        if (savedKey.isEmpty()) {
+            new AlertDialog.Builder(this)
+                .setTitle("Conectar gerador de vídeo")
+                .setMessage("Cria uma chave na tua conta fal.ai. Não partilhes a chave no chat.")
+                .setView(keyInput)
+                .setPositiveButton("SALVAR E CONTINUAR", (d, w) -> {
+                    String key = keyInput.getText().toString().trim();
+                    if (key.isEmpty()) {
+                        status.setText("Chave não informada.");
+                        return;
+                    }
+                    prefs.edit().putString("fal_api_key", key).apply();
+                    confirmVideoCost(key);
+                })
+                .setNegativeButton("CANCELAR", null)
+                .show();
+        } else {
+            confirmVideoCost(savedKey);
+        }
+    }
+
+    private void confirmVideoCost(String key) {
+        new AlertDialog.Builder(this)
+            .setTitle("Prévia de vídeo de 5 segundos")
+            .setMessage("Será enviada uma geração de 5 segundos em 480p. A API pode cobrar pela geração. Continuar?")
+            .setPositiveButton("GERAR", (d, w) -> requestVideoPreview(key))
+            .setNegativeButton("CANCELAR", null)
+            .show();
+    }
+
+    private void requestVideoPreview(String key) {
+        String title = val(titleInput);
+        String idea = val(ideaInput);
+        String script = val(episodeOutput);
+        if (title.isEmpty() || (idea.isEmpty() && script.isEmpty())) {
+            status.setText("Preenche o título e a ideia ou gera um roteiro primeiro.");
+            return;
+        }
+
+        String prompt = "Vertical 9:16 animated Japanese anime, polished 2D anime aesthetic, "
+            + "fluid character movement, dramatic camera movement, expressive faces, cinematic lighting, "
+            + "detailed background. Title: " + title + ". Story: " + idea
+            + ". Scene: " + script
+            + ". One coherent five-second scene, no subtitles, no text, no logos.";
+
+        status.setText("Enviando a prévia de vídeo...");
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("prompt", prompt);
+                body.put("duration", 5);
+                body.put("resolution", "480P");
+                body.put("aspect_ratio", "9:16");
+                body.put("prompt_expansion_mode", "disabled");
+
+                JSONObject queued = falRequest(
+                    "https://queue.fal.run/minimax/h3-max-turbo/text-to-video",
+                    key, "POST", body);
+
+                String statusUrl = queued.optString("status_url", "");
+                String resultUrl = queued.optString("response_url", "");
+                if (statusUrl.isEmpty() || resultUrl.isEmpty())
+                    throw new Exception("A API não devolveu os endereços da fila.");
+
+                runOnUiThread(() -> status.setText("Pedido enviado. Renderizando a cena..."));
+
+                boolean done = false;
+                for (int i = 0; i < 60; i++) {
+                    Thread.sleep(3000);
+                    JSONObject check = falRequest(statusUrl, key, "GET", null);
+                    String state = check.optString("status", "");
+                    if ("COMPLETED".equals(state)) {
+                        done = true;
+                        break;
+                    }
+                    if ("FAILED".equals(state))
+                        throw new Exception("O serviço informou falha na geração.");
+                }
+                if (!done) throw new Exception("Demorou demais. Tenta consultar novamente mais tarde.");
+
+                JSONObject result = falRequest(resultUrl, key, "GET", null);
+                JSONObject video = result.optJSONObject("video");
+                if (video == null) throw new Exception("A resposta não contém vídeo.");
+                String videoUrl = video.optString("url", "");
+                if (videoUrl.isEmpty()) throw new Exception("A API não devolveu o link do vídeo.");
+
+                runOnUiThread(() -> new AlertDialog.Builder(AnimeActivity.this)
+                    .setTitle("Prévia pronta")
+                    .setMessage("Vídeo de 5 segundos gerado. Abre o link para assistir. Ainda não é o vídeo final de 1 minuto.\n\n" + videoUrl)
+                    .setPositiveButton("ABRIR VÍDEO", (d, w) -> {
+                        try {
+                            startActivity(new android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(videoUrl)));
+                        } catch (Exception e) {
+                            status.setText("Erro ao abrir vídeo: " + e.getMessage());
+                        }
+                    })
+                    .setNeutralButton("COPIAR LINK", (d, w) -> {
+                        android.content.ClipboardManager cm =
+                            (android.content.ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("Vídeo JARVIS", videoUrl));
+                        Toast.makeText(AnimeActivity.this, "Link copiado", Toast.LENGTH_SHORT).show();
+                    })
+                    .setNegativeButton("FECHAR", null)
+                    .show());
+            } catch (Exception e) {
+                String msg = e.getMessage() == null ? "Erro desconhecido" : e.getMessage();
+                runOnUiThread(() -> status.setText("Erro ao gerar vídeo: " + msg));
+            }
+        }).start();
+    }
+
+    private JSONObject falRequest(String address, String key, String method, JSONObject body)
+            throws Exception {
+        HttpURLConnection c = (HttpURLConnection)new URL(address).openConnection();
+        try {
+            c.setRequestMethod(method);
+            c.setConnectTimeout(20000);
+            c.setReadTimeout(30000);
+            c.setRequestProperty("Authorization", "Key " + key);
+            c.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+            if (body != null) {
+                c.setDoOutput(true);
+                try (OutputStream os = c.getOutputStream()) {
+                    os.write(body.toString().getBytes(StandardCharsets.UTF_8));
+                }
+            }
+            int code = c.getResponseCode();
+            String data = readAll(code >= 200 && code < 300
+                ? c.getInputStream() : c.getErrorStream());
+            if (code < 200 || code >= 300)
+                throw new Exception("fal.ai (" + code + "): " + data);
+            return new JSONObject(data);
+        } finally {
+            c.disconnect();
+        }
+    }
+
 }
