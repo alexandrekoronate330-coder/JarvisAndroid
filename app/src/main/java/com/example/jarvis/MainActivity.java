@@ -144,6 +144,14 @@ public class MainActivity extends Activity {
         mangaButton.setOnClickListener(v ->
                 startActivity(new Intent(
                         MainActivity.this, MangaActivity.class)));
+
+        Button animeButton = new Button(this);
+        animeButton.setText("Criar Anime");
+        layout.addView(animeButton,
+                new LinearLayout.LayoutParams(-1, -2));
+        animeButton.setOnClickListener(v ->
+                startActivity(new Intent(
+                        MainActivity.this, AnimeActivity.class)));
     }
 
     private void startListening() {

@@ -6,7 +6,7 @@
         android:label="Jarvis"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="false">
-        <activity android:name=".MangaActivity" android:exported="false" />
+        <activity android:name=".MangaActivity" android:exported="false" />\n        <activity android:name=".AnimeActivity" android:exported="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true">
