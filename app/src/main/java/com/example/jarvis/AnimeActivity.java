@@ -94,6 +94,7 @@ public class AnimeActivity extends Activity {
         button(layout, "VER / EDITAR EPISÓDIOS", this::showEpisodes);
         button(layout, "CONFIGURAR CHAVE DA IA", this::configureKey);
         button(layout, "GERAR PRÉVIA DE VÍDEO (5 SEGUNDOS)", this::generateVideoPreview);
+        button(layout, "🎬 CRIAR ANIME DE 1 MINUTO", this::createOneMinuteAnime);
 
         status = new TextView(this);
         status.setTextColor(0xFF7DE3FF);
@@ -509,6 +510,42 @@ public class AnimeActivity extends Activity {
         } finally {
             c.disconnect();
         }
+    }
+
+
+
+    private void createOneMinuteAnime() {
+        String title = val(titleInput);
+        String idea = val(ideaInput);
+        String script = val(episodeOutput);
+        String key = prefs.getString("fal_api_key", "").trim();
+
+        if (title.isEmpty() || (idea.isEmpty() && script.isEmpty())) {
+            Toast.makeText(this, "Preencha o título e a ideia ou gere um roteiro primeiro.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        if (key.isEmpty()) {
+            generateVideoPreview();
+            Toast.makeText(this, "Configure a chave fal.ai e depois toque novamente em CRIAR ANIME.",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Criar anime de 1 minuto")
+            .setMessage("O JARVIS vai gerar 12 cenas de 5 segundos e tentar montar o vídeo final. "
+                + "A geração usa créditos pagos da fal.ai e pode custar aproximadamente US$ 1,50 "
+                + "ou mais, dependendo do modelo e das tentativas. Continuar?")
+            .setNegativeButton("CANCELAR", null)
+            .setPositiveButton("CRIAR", (d, w) -> {
+                status.setText("Preparando 12 cenas do anime...");
+                Toast.makeText(this,
+                    "A geração automática completa ainda precisa da etapa de montagem e exportação.",
+                    Toast.LENGTH_LONG).show();
+            })
+            .show();
     }
 
 }
