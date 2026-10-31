@@ -124,6 +124,19 @@ public class MainActivity extends Activity {
         layout.addView(mangaButton,
                 new LinearLayout.LayoutParams(-1, -2));
 
+        mangaButton.setOnClickListener(v ->
+                startActivity(new Intent(
+                        MainActivity.this, MangaActivity.class)));
+
+        Button animeButton = new Button(this);
+        animeButton.setText("Criar Anime");
+        layout.addView(animeButton,
+                new LinearLayout.LayoutParams(-1, -2));
+
+        animeButton.setOnClickListener(v ->
+                startActivity(new Intent(
+                        MainActivity.this, AnimeActivity.class)));
+
         ScrollView scroll = new ScrollView(this);
         log = new TextView(this);
         log.setTextColor(0xFFE6F1F5);
@@ -140,19 +153,6 @@ public class MainActivity extends Activity {
 
         startButton.setOnClickListener(v -> startListening());
         stopButton.setOnClickListener(v -> stopListening());
-
-        mangaButton.setOnClickListener(v ->
-                startActivity(new Intent(
-                        MainActivity.this, MangaActivity.class)));
-
-        Button animeButton = new Button(this);
-        animeButton.setText("Criar Anime");
-        layout.addView(animeButton,
-                new LinearLayout.LayoutParams(-1, -2));
-        animeButton.setOnClickListener(v ->
-                startActivity(new Intent(
-                        MainActivity.this, AnimeActivity.class)));
-    }
 
     private void startListening() {
         if (started) return;
