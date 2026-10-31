@@ -153,6 +153,7 @@ public class MainActivity extends Activity {
 
         startButton.setOnClickListener(v -> startListening());
         stopButton.setOnClickListener(v -> stopListening());
+    }
 
     private void startListening() {
         if (started) return;
