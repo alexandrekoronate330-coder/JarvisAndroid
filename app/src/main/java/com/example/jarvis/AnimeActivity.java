@@ -18,6 +18,7 @@ public class AnimeActivity extends Activity {
     private TextView status;
     private JSONObject projects = new JSONObject();
     private String currentTitle = "";
+    private int selectedEpisodeIndex = -1;
     private int dp(int n) {
         return (int)(n * getResources().getDisplayMetrics().density + 0.5f);
     }
@@ -283,6 +284,7 @@ public class AnimeActivity extends Activity {
                 savedEpisodes.put(ep);
                 p.put("episodes", savedEpisodes);
                 persist();
+                selectedEpisodeIndex = savedEpisodes.length() - 1;
 
                 runOnUiThread(() -> {
                     episodeOutput.setText(text);
@@ -329,6 +331,7 @@ public class AnimeActivity extends Activity {
             .setItems(names, (dialog, which) -> {
                 JSONObject ep = eps.optJSONObject(which);
                 if (ep != null) {
+                    selectedEpisodeIndex = which;
                     episodeOutput.setText(ep.optString("text", ""));
                     status.setText(names[which] + " aberto para leitura e edição.");
                 }
@@ -343,23 +346,34 @@ public class AnimeActivity extends Activity {
             Toast.makeText(this, "Abre um anime primeiro", Toast.LENGTH_SHORT).show();
             return;
         }
+
         JSONArray eps = p.optJSONArray("episodes");
-        if (eps == null || eps.length() == 0) {
-            status.setText("Gera o primeiro episódio antes de salvar edições.");
+        if (eps == null || selectedEpisodeIndex < 0
+                || selectedEpisodeIndex >= eps.length()) {
+            status.setText("Abre um episódio na lista antes de salvar a edição.");
             return;
         }
+
+        JSONObject selected = eps.optJSONObject(selectedEpisodeIndex);
+        if (selected == null) {
+            status.setText("Não foi possível localizar o episódio selecionado.");
+            return;
+        }
+
+        int number = selected.optInt("number", selectedEpisodeIndex + 1);
+
         new AlertDialog.Builder(this)
             .setTitle("Salvar edição")
-            .setMessage("Salvar o texto atual no episódio mais recente?")
+            .setMessage("Salvar as alterações no episódio " + number + "?")
             .setPositiveButton("SALVAR", (d, w) -> {
                 try {
-                    JSONObject last = eps.getJSONObject(eps.length() - 1);
-                    last.put("text", val(episodeOutput));
+                    selected.put("text", val(episodeOutput));
                     p.put("episodes", eps);
                     persist();
-                    status.setText("Edição salva no episódio " + last.optInt("number") + ".");
+                    status.setText("Edição salva no episódio " + number + ".");
+                    Toast.makeText(this, "Episódio atualizado", Toast.LENGTH_SHORT).show();
                 } catch (Exception e) {
-                    status.setText("Erro ao salvar a edição.");
+                    status.setText("Erro ao salvar a edição: " + e.getMessage());
                 }
             })
             .setNegativeButton("CANCELAR", null)
