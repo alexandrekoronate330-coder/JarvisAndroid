@@ -34,6 +34,7 @@ public class MainActivity extends Activity {
     private Button startButton, stopButton;
     private SpeechRecognizer speechRecognizer;
     private TextToSpeech tts;
+    private boolean ttsReady = false;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean started = false;
     private SharedPreferences prefs;
@@ -47,7 +48,16 @@ public class MainActivity extends Activity {
 
         tts = new TextToSpeech(this, result -> {
             if (result == TextToSpeech.SUCCESS) {
-                tts.setLanguage(new Locale("pt", "BR"));
+                int languageResult = tts.setLanguage(new Locale("pt", "BR"));
+                ttsReady = languageResult != TextToSpeech.LANG_MISSING_DATA
+                        && languageResult != TextToSpeech.LANG_NOT_SUPPORTED;
+
+                if (!ttsReady) {
+                    writeLog("Idioma português indisponível no mecanismo de voz.");
+                }
+            } else {
+                ttsReady = false;
+                writeLog("Não foi possível inicializar a voz do Jarvis.");
             }
         });
 
@@ -182,63 +192,71 @@ public class MainActivity extends Activity {
     private void listenForCommand() {
         if (!started) return;
 
-        if (speechRecognizer != null) {
-            speechRecognizer.destroy();
+        try {
+            if (speechRecognizer != null) {
+                try {
+                    speechRecognizer.destroy();
+                } catch (RuntimeException ignored) {
+                }
+                speechRecognizer = null;
+            }
+
+            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+
+            speechRecognizer.setRecognitionListener(new RecognitionListener() {
+                @Override
+                public void onReadyForSpeech(Bundle params) {
+                    if (started) status.setText("Ouvindo comando...");
+                }
+
+                @Override public void onBeginningOfSpeech() {}
+                @Override public void onRmsChanged(float rmsdB) {}
+                @Override public void onBufferReceived(byte[] buffer) {}
+
+                @Override
+                public void onEndOfSpeech() {
+                    if (started) status.setText("Processando...");
+                }
+
+                @Override
+                public void onError(int error) {
+                    if (started) {
+                        writeLog("Falha no reconhecimento de voz. Código: " + error);
+                        finishListening();
+                    }
+                }
+
+                @Override
+                public void onResults(Bundle results) {
+                    if (!started) return;
+
+                    ArrayList<String> matches = results.getStringArrayList(
+                            SpeechRecognizer.RESULTS_RECOGNITION);
+
+                    if (matches != null && !matches.isEmpty()) {
+                        handleCommand(matches.get(0));
+                    } else {
+                        finishListening();
+                    }
+                }
+
+                @Override public void onPartialResults(Bundle results) {}
+                @Override public void onEvent(int eventType, Bundle params) {}
+            });
+
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            intent.putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR");
+            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+
+            speechRecognizer.startListening(intent);
+
+        } catch (RuntimeException e) {
+            writeLog("Não foi possível iniciar o reconhecimento de voz.");
+            finishListening();
         }
-
-        speechRecognizer =
-                SpeechRecognizer.createSpeechRecognizer(this);
-
-        speechRecognizer.setRecognitionListener(
-                new RecognitionListener() {
-            @Override
-            public void onReadyForSpeech(Bundle params) {
-                status.setText("Ouvindo comando...");
-            }
-
-            @Override public void onBeginningOfSpeech() {}
-            @Override public void onRmsChanged(float rmsdB) {}
-            @Override public void onBufferReceived(byte[] buffer) {}
-
-            @Override
-            public void onEndOfSpeech() {
-                status.setText("Processando...");
-            }
-
-            @Override
-            public void onError(int error) {
-                if (started) {
-                    writeLog("Não entendi. Tente novamente.");
-                    finishListening();
-                }
-            }
-
-            @Override
-            public void onResults(Bundle results) {
-                ArrayList<String> matches =
-                        results.getStringArrayList(
-                                SpeechRecognizer.RESULTS_RECOGNITION);
-
-                if (matches != null && !matches.isEmpty()) {
-                    handleCommand(matches.get(0));
-                } else {
-                    finishListening();
-                }
-            }
-
-            @Override public void onPartialResults(Bundle results) {}
-            @Override public void onEvent(int eventType, Bundle params) {}
-        });
-
-        Intent intent =
-                new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        intent.putExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "pt-BR");
-        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
-
-        speechRecognizer.startListening(intent);
     }
 
     private void handleCommand(String raw) {
@@ -321,7 +339,10 @@ public class MainActivity extends Activity {
         started = false;
 
         if (speechRecognizer != null) {
-            speechRecognizer.destroy();
+            try {
+                speechRecognizer.destroy();
+            } catch (RuntimeException ignored) {
+            }
             speechRecognizer = null;
         }
 
@@ -333,7 +354,7 @@ public class MainActivity extends Activity {
     private void speak(String text) {
         writeLog("JARVIS: " + text);
 
-        if (tts != null) {
+        if (tts != null && ttsReady) {
             tts.speak(text, TextToSpeech.QUEUE_FLUSH,
                     null, "jarvis_tts");
         }
@@ -349,7 +370,10 @@ public class MainActivity extends Activity {
         started = false;
 
         if (speechRecognizer != null) {
-            speechRecognizer.destroy();
+            try {
+                speechRecognizer.destroy();
+            } catch (RuntimeException ignored) {
+            }
             speechRecognizer = null;
         }
 
