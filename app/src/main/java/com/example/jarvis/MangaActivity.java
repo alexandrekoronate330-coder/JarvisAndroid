@@ -260,14 +260,47 @@ public class MangaActivity extends Activity {
         }
     }
 
-    private void persistProjects() {
+    private boolean persistProjects() {
         if (!projectsStorageValid) {
             android.util.Log.e("Jarvis", "Gravação bloqueada: armazenamento de projetos não foi validado.");
             Toast.makeText(this, "Salvamento bloqueado para proteger seus mangás.", Toast.LENGTH_LONG).show();
-            return;
+            return false;
         }
-        prefs.edit().putString("projects_json", projects.toString()).apply();
-        refreshProjectList();
+
+        String previousJson = prefs.getString("projects_json", "{}");
+        boolean saved = prefs.edit().putString("projects_json", projects.toString()).commit();
+
+        if (saved) {
+            refreshProjectList();
+            return true;
+        }
+
+        android.util.Log.e("Jarvis", "Falha ao gravar projetos no armazenamento.");
+        Toast.makeText(this, "Não foi possível salvar. Restaurando a última versão gravada.", Toast.LENGTH_LONG).show();
+
+        try {
+            projects = new JSONObject(previousJson);
+            boolean restored = prefs.edit().putString("projects_json", previousJson).commit();
+            if (!restored) {
+                android.util.Log.e("Jarvis", "A restauração no armazenamento também falhou.");
+            }
+
+            if (!projects.has(currentTitle)) {
+                currentTitle = "";
+            }
+
+            refreshProjectList();
+            JSONObject restoredProject = currentProject();
+            if (restoredProject != null) {
+                showProject(restoredProject);
+            }
+        } catch (org.json.JSONException restoreError) {
+            projectsStorageValid = false;
+            android.util.Log.e("Jarvis", "Falha ao restaurar os projetos anteriores.", restoreError);
+            Toast.makeText(this, "A restauração falhou. Novas gravações foram bloqueadas.", Toast.LENGTH_LONG).show();
+        }
+
+        return false;
     }
 
     private JSONObject currentProject() {
@@ -321,8 +354,10 @@ public class MangaActivity extends Activity {
                 .setMessage("Deseja apagar \"" + name + "\" e todos os seus capítulos? Esta ação não pode ser desfeita.")
                 .setNegativeButton("Cancelar", (dialog, which) -> dialog.dismiss())
                 .setPositiveButton("Apagar", (dialog, which) -> {
+                    boolean deletingCurrent = name.equals(currentTitle);
                     projects.remove(name);
-                    if (name.equals(currentTitle)) {
+                    if (!persistProjects()) return;
+                    if (deletingCurrent) {
                         currentTitle = "";
                         titleInput.setText("");
                         genreInput.setText("");
@@ -332,8 +367,9 @@ public class MangaActivity extends Activity {
                         chapterTitleInput.setText("");
                         chapterTextInput.setText("");
                         result.setText("Mangá apagado.");
+                        mangaImage.setImageDrawable(null);
+                        mangaImage.setVisibility(View.GONE);
                     }
-                    persistProjects();
                     Toast.makeText(this, "Mangá apagado.", Toast.LENGTH_SHORT).show();
                 }).show());
         }
@@ -366,7 +402,7 @@ public class MangaActivity extends Activity {
             p.put("character_versions", new JSONArray());
             projects.put(title, p);
             currentTitle = title;
-            persistProjects();
+            if (!persistProjects()) return;
             showProject(p);
             Toast.makeText(this, "Novo mangá salvo!", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
@@ -386,7 +422,7 @@ public class MangaActivity extends Activity {
         chapterTitleInput.setText("");
         chapterTextInput.setText("");
         chapterArray(p);
-        persistProjects();
+        if (!persistProjects()) return;
         showProject(p);
     }
 
@@ -433,7 +469,12 @@ public class MangaActivity extends Activity {
             while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
 
             project.put("character_image_path", destination.getAbsolutePath());
-            persistProjects();
+            if (!persistProjects()) {
+                if (destination.exists() && !destination.delete()) {
+                    android.util.Log.w("Jarvis", "Não foi possível remover a imagem nova após falha no salvamento.");
+                }
+                return;
+            }
             deleteManagedImage(oldPath);
             showProject(project);
             Toast.makeText(this, "Imagem salva neste mangá!", Toast.LENGTH_SHORT).show();
@@ -463,7 +504,7 @@ public class MangaActivity extends Activity {
             .setPositiveButton("Remover", (dialog, which) -> {
                 try {
                     project.remove("character_image_path");
-                    persistProjects();
+                    if (!persistProjects()) return;
                     deleteManagedImage(oldPath);
                     showProject(project);
                     Toast.makeText(this, "Imagem removida.", Toast.LENGTH_SHORT).show();
@@ -491,11 +532,16 @@ public class MangaActivity extends Activity {
 
     private void showProject(JSONObject p) {
         JSONArray chapters = chapterArray(p);
+        String imageStatus = p.optString("character_image_status", "current");
+        String imageNotice = "pending_regeneration".equals(imageStatus)
+                ? "\n\n⚠️ A descrição do personagem mudou. A imagem exibida ainda é a versão anterior."
+                : "";
         result.setText("PROJETO ABERTO\n\n" +
             "Título: " + p.optString("title", "") + "\n" +
             "Gênero/estilo: " + p.optString("genre", "") + "\n" +
             "Capítulos salvos: " + chapters.length() + "\n\n" +
             "PERSONAGENS\n" + p.optString("characters", "Não definidos.") +
+            imageNotice +
             "\n\nIDEIA DA HISTÓRIA\n" + p.optString("idea", "") +
             "\n\nUse 'Ver / editar capítulos salvos' para consultar e alterar os capítulos.");
         String imagePath = p.optString("character_image_path", "");
@@ -532,7 +578,7 @@ public class MangaActivity extends Activity {
             projects.remove(currentTitle);
             projects.put(newTitle, p);
             currentTitle = newTitle;
-            persistProjects();
+            if (!persistProjects()) return;
             showProject(p);
             Toast.makeText(this, "Título alterado sem perder os capítulos!", Toast.LENGTH_LONG).show();
         } catch (Exception e) {
@@ -552,23 +598,57 @@ public class MangaActivity extends Activity {
             return;
         }
         try {
+            JSONObject previousProject = new JSONObject(p.toString());
+            String currentDescription = value(characterInput);
+            String baseDescription = p.optString("characters_base", "");
+            if (baseDescription.isEmpty()) {
+                baseDescription = currentDescription;
+                p.put("characters_base", baseDescription);
+            }
+
             JSONArray versions = p.optJSONArray("character_versions");
             if (versions == null) versions = new JSONArray();
+
             JSONObject version = new JSONObject();
             version.put("description", description);
             version.put("date", System.currentTimeMillis());
+            version.put("previous_description", currentDescription);
+            version.put("base_description", baseDescription);
+            version.put("image_status", "pending_regeneration");
             versions.put(version);
+
             p.put("character_versions", versions);
-            String updated = value(characterInput);
-            if (!updated.isEmpty()) updated += "\n\n";
-            updated += "Alteração solicitada: " + description;
-            p.put("characters", updated);
-            characterInput.setText(updated);
+            p.put("character_image_status", "pending_regeneration");
+
+            StringBuilder updated = new StringBuilder(baseDescription);
+            if (versions.length() > 0) {
+                if (updated.length() > 0) updated.append("\n\n");
+                updated.append("ALTERAÇÕES SOLICITADAS:");
+                for (int i = 0; i < versions.length(); i++) {
+                    JSONObject savedVersion = versions.optJSONObject(i);
+                    if (savedVersion != null) {
+                        updated.append("\n").append(i + 1).append(". ")
+                                .append(savedVersion.optString("description", ""));
+                    }
+                }
+            }
+
+            p.put("characters", updated.toString());
+            characterInput.setText(updated.toString());
             editCharacterInput.setText("");
-            persistProjects();
+            if (!persistProjects()) {
+                projects.put(currentTitle, previousProject);
+                characterInput.setText(previousProject.optString("characters", ""));
+                showProject(previousProject);
+                showMessage("A alteração não foi salva. Os dados anteriores foram restaurados.");
+                return;
+            }
             showProject(p);
-            Toast.makeText(this, "Descrição salva. A imagem ainda não foi regenerada.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this,
+                    "Alteração registrada. A imagem original foi preservada; a regeneração será conectada depois.",
+                    Toast.LENGTH_LONG).show();
         } catch (Exception e) {
+            android.util.Log.e("Jarvis", "Não foi possível registrar a alteração do personagem.", e);
             showMessage("Erro ao salvar a descrição.");
         }
     }
@@ -597,7 +677,7 @@ public class MangaActivity extends Activity {
             p.put("chapters", chapters);
             p.put("chapter", chapters.length());
             p.put("chapter_text", text);
-            persistProjects();
+            if (!persistProjects()) return;
             chapterTitleInput.setText("");
             chapterTextInput.setText("");
             showProject(p);
@@ -852,7 +932,7 @@ public class MangaActivity extends Activity {
                     chapter.put("savedAt", System.currentTimeMillis());
                     p.put("chapters", chapters);
                     p.put("chapter_text", newText);
-                    persistProjects();
+                    if (!persistProjects()) return;
                     showProject(p);
                     Toast.makeText(this, "Capítulo atualizado!", Toast.LENGTH_SHORT).show();
                 } catch (Exception e) {
@@ -911,7 +991,7 @@ public class MangaActivity extends Activity {
             p.put("genre", value(genreInput));
             p.put("characters", value(characterInput));
             p.put("idea", value(ideaInput));
-            persistProjects();
+            if (!persistProjects()) return;
             showProject(p);
             Toast.makeText(this, "Dados do mangá salvos!", Toast.LENGTH_SHORT).show();
         } catch (Exception e) {
