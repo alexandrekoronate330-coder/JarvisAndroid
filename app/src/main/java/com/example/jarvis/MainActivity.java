@@ -26,6 +26,16 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Locale;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class MainActivity extends Activity {
 
@@ -38,6 +48,7 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean started = false;
     private SharedPreferences prefs;
+    private final ExecutorService aiExecutor = Executors.newSingleThreadExecutor();
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -329,10 +340,122 @@ public class MainActivity extends Activity {
             return;
 
         } else {
-            speak("Ainda não conheço esse comando.");
+            askJarvisAI(raw);
         }
 
         finishListening();
+    }
+
+    private void askJarvisAI(String question) {
+        aiExecutor.execute(() -> {
+            HttpURLConnection connection = null;
+            try {
+                SharedPreferences aiPrefs = getSharedPreferences(
+                        "jarvis_manga_projects", MODE_PRIVATE);
+                String apiKey = aiPrefs.getString("groq_api_key", "").trim();
+
+                if (apiKey.isEmpty()) {
+                    handler.post(() -> speak(
+                            "A chave da inteligência artificial ainda não está configurada."));
+                    return;
+                }
+
+                String notes = prefs.getString("notes", "");
+                JSONObject body = new JSONObject();
+                body.put("model", "openai/gpt-oss-20b");
+                body.put("temperature", 0.7);
+                body.put("max_tokens", 700);
+
+                JSONArray messages = new JSONArray();
+                messages.put(new JSONObject()
+                        .put("role", "system")
+                        .put("content", "Você é o Jarvis, assistente virtual do usuário. "
+                                + "Responda em português brasileiro, de forma clara e útil. "
+                                + "Use estas anotações como contexto, sem inventar fatos: "
+                                + notes));
+
+                JSONArray history;
+                try {
+                    history = new JSONArray(prefs.getString("chat_history", "[]"));
+                } catch (org.json.JSONException error) {
+                    android.util.Log.e("Jarvis", "Histórico de conversa inválido; iniciando histórico vazio.", error);
+                    history = new JSONArray();
+                }
+
+                for (int i = 0; i < history.length(); i++) {
+                    messages.put(history.getJSONObject(i));
+                }
+
+                messages.put(new JSONObject()
+                        .put("role", "user")
+                        .put("content", question));
+                body.put("messages", messages);
+
+                connection = (HttpURLConnection) new URL(
+                        "https://api.groq.com/openai/v1/chat/completions")
+                        .openConnection();
+                connection.setRequestMethod("POST");
+                connection.setConnectTimeout(15000);
+                connection.setReadTimeout(30000);
+                connection.setDoOutput(true);
+                connection.setRequestProperty("Content-Type", "application/json");
+                connection.setRequestProperty("Authorization", "Bearer " + apiKey);
+
+                try (OutputStream output = connection.getOutputStream()) {
+                    output.write(body.toString().getBytes(StandardCharsets.UTF_8));
+                }
+
+                int code = connection.getResponseCode();
+                java.io.InputStream stream = code >= 200 && code < 300
+                        ? connection.getInputStream() : connection.getErrorStream();
+
+                if (stream == null) {
+                    throw new Exception("Resposta vazia do servidor.");
+                }
+
+                StringBuilder responseText = new StringBuilder();
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        responseText.append(line);
+                    }
+                }
+
+                if (code < 200 || code >= 300) {
+                    throw new Exception("A Groq retornou o erro " + code);
+                }
+
+                JSONObject response = new JSONObject(responseText.toString());
+                String answer = response.getJSONArray("choices")
+                        .getJSONObject(0).getJSONObject("message")
+                        .getString("content").trim();
+
+                history.put(new JSONObject()
+                        .put("role", "user")
+                        .put("content", question));
+                history.put(new JSONObject()
+                        .put("role", "assistant")
+                        .put("content", answer));
+
+                while (history.length() > 10) {
+                    history.remove(0);
+                }
+
+                prefs.edit()
+                        .putString("chat_history", history.toString())
+                        .apply();
+
+                handler.post(() -> speak(answer));
+
+            } catch (Exception e) {
+                handler.post(() -> speak(
+                        "Não consegui obter uma resposta da inteligência artificial. "
+                                + "Verifique a conexão e a configuração da Groq."));
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        });
     }
 
     private void finishListening() {
@@ -385,6 +508,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         handler.removeCallbacksAndMessages(null);
+        aiExecutor.shutdownNow();
         stopListening();
 
         if (tts != null) {

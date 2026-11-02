@@ -1,10 +1,23 @@
-name: Compilar Jarvis Android
+name: Diagnosticar e Compilar Jarvis Android
 
 on:
-  workflow_dispatch
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'app/**'
+      - '*.gradle'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
 
 jobs:
-  build:
+  diagnostico:
+    name: Testar e compilar
     runs-on: ubuntu-latest
 
     steps:
@@ -20,18 +33,38 @@ jobs:
       - name: Configurar Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Instalar Gradle 8.9
+      - name: Configurar Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Instalar plataforma Android 35
+      - name: Instalar plataforma Android
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Compilar APK
+      - name: Verificar versão do Gradle
+        run: gradle --version
+
+      - name: Executar testes disponíveis
+        run: gradle testDebugUnitTest
+
+      - name: Verificar código Android
+        run: gradle lintDebug
+
+      - name: Compilar aplicativo
         run: gradle assembleDebug
 
+      - name: Salvar relatório de diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Relatorio-diagnostico
+          path: |
+            app/build/reports/
+            app/build/test-results/
+          if-no-files-found: ignore
+
       - name: Disponibilizar APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: Jarvis-debug

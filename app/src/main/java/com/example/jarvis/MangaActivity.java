@@ -4,14 +4,18 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.os.Bundle;
 import android.graphics.Color;
+import android.graphics.BitmapFactory;
 import android.view.Gravity;
+import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.ImageView;
 import android.content.SharedPreferences;
 import android.content.Intent;
+import android.net.Uri;
 import android.speech.tts.TextToSpeech;
 import android.widget.Toast;
 
@@ -21,6 +25,7 @@ import org.json.JSONObject;
 import java.util.Locale;
 import java.io.BufferedReader;
 import java.io.InputStream;
+import java.io.FileOutputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -32,11 +37,14 @@ public class MangaActivity extends Activity {
     private EditText ideaInput, editCharacterInput;
     private EditText chapterTitleInput, chapterTextInput;
     private TextView result;
+    private ImageView mangaImage;
+    private static final int REQUEST_CHARACTER_IMAGE = 731;
     private LinearLayout layout, projectsContainer;
     private SharedPreferences prefs;
     private TextToSpeech tts;
     private boolean ttsReady = false;
     private JSONObject projects = new JSONObject();
+    private boolean projectsStorageValid = true;
     private String currentTitle = "";
     private float chapterTextSize = 16f;
 
@@ -141,6 +149,14 @@ public class MangaActivity extends Activity {
         layout.addView(updateCharacter);
         updateCharacter.setOnClickListener(v -> updateCharacter());
 
+        Button chooseImage = button("🖼️ Escolher imagem do personagem");
+        layout.addView(chooseImage);
+        chooseImage.setOnClickListener(v -> chooseCharacterImage());
+
+        Button removeImage = button("🗑️ Remover imagem do personagem");
+        layout.addView(removeImage);
+        removeImage.setOnClickListener(v -> removeCharacterImage());
+
         addSectionTitle("CAPÍTULOS");
         layout.addView(chapterTitleInput);
         layout.addView(chapterTextInput);
@@ -202,6 +218,13 @@ public class MangaActivity extends Activity {
             if (tts != null) tts.stop();
         });
 
+        mangaImage = new ImageView(this);
+        mangaImage.setAdjustViewBounds(true);
+        mangaImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        mangaImage.setVisibility(View.GONE);
+        layout.addView(mangaImage, new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(280)));
+
         result = new TextView(this);
         result.setTextColor(Color.WHITE);
         result.setTextSize(chapterTextSize);
@@ -228,12 +251,21 @@ public class MangaActivity extends Activity {
     private void loadProjectsFromStorage() {
         try {
             projects = new JSONObject(prefs.getString("projects_json", "{}"));
-        } catch (Exception e) {
+            projectsStorageValid = true;
+        } catch (org.json.JSONException e) {
+            projectsStorageValid = false;
             projects = new JSONObject();
+            android.util.Log.e("Jarvis", "Projetos inválidos. Gravações bloqueadas para proteger os dados originais.", e);
+            Toast.makeText(this, "Erro ao ler projetos. Dados preservados; gravações bloqueadas.", Toast.LENGTH_LONG).show();
         }
     }
 
     private void persistProjects() {
+        if (!projectsStorageValid) {
+            android.util.Log.e("Jarvis", "Gravação bloqueada: armazenamento de projetos não foi validado.");
+            Toast.makeText(this, "Salvamento bloqueado para proteger seus mangás.", Toast.LENGTH_LONG).show();
+            return;
+        }
         prefs.edit().putString("projects_json", projects.toString()).apply();
         refreshProjectList();
     }
@@ -358,6 +390,105 @@ public class MangaActivity extends Activity {
         showProject(p);
     }
 
+
+    private void chooseCharacterImage() {
+        if (currentProject() == null) {
+            showMessage("Abra um mangá antes de escolher uma imagem.");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.setType("image/*");
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        try {
+            startActivityForResult(Intent.createChooser(intent, "Escolher imagem"), REQUEST_CHARACTER_IMAGE);
+        } catch (Exception e) {
+            showMessage("Não foi possível abrir a galeria.");
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_CHARACTER_IMAGE || resultCode != RESULT_OK
+                || data == null || data.getData() == null) return;
+        saveCharacterImage(data.getData());
+    }
+
+    private void saveCharacterImage(Uri uri) {
+        JSONObject project = currentProject();
+        if (project == null) {
+            showMessage("Abra um mangá antes de salvar a imagem.");
+            return;
+        }
+
+        String oldPath = project.optString("character_image_path", "");
+        String fileName = "personagem_" + System.currentTimeMillis() + ".img";
+        java.io.File destination = new java.io.File(getFilesDir(), fileName);
+
+        try (InputStream in = getContentResolver().openInputStream(uri);
+             FileOutputStream out = new FileOutputStream(destination)) {
+            if (in == null) throw new Exception("Não foi possível ler a imagem.");
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = in.read(buffer)) != -1) out.write(buffer, 0, count);
+
+            project.put("character_image_path", destination.getAbsolutePath());
+            persistProjects();
+            deleteManagedImage(oldPath);
+            showProject(project);
+            Toast.makeText(this, "Imagem salva neste mangá!", Toast.LENGTH_SHORT).show();
+        } catch (Exception e) {
+            if (destination.exists()) destination.delete();
+            showMessage("Não foi possível salvar a imagem. Tente outra.");
+        }
+    }
+
+    private void removeCharacterImage() {
+        JSONObject project = currentProject();
+        if (project == null) {
+            showMessage("Abra um mangá primeiro.");
+            return;
+        }
+
+        String oldPath = project.optString("character_image_path", "");
+        if (oldPath.isEmpty()) {
+            showMessage("Este mangá ainda não tem imagem salva.");
+            return;
+        }
+
+        new AlertDialog.Builder(this)
+            .setTitle("Remover imagem?")
+            .setMessage("A imagem será removida, mas os dados do personagem e os capítulos serão mantidos.")
+            .setNegativeButton("Cancelar", null)
+            .setPositiveButton("Remover", (dialog, which) -> {
+                try {
+                    project.remove("character_image_path");
+                    persistProjects();
+                    deleteManagedImage(oldPath);
+                    showProject(project);
+                    Toast.makeText(this, "Imagem removida.", Toast.LENGTH_SHORT).show();
+                } catch (Exception e) {
+                    showMessage("Não foi possível remover a imagem.");
+                }
+            })
+            .show();
+    }
+
+    private void deleteManagedImage(String path) {
+        if (path == null || path.isEmpty()) return;
+        try {
+            java.io.File root = getFilesDir().getCanonicalFile();
+            java.io.File target = new java.io.File(path).getCanonicalFile();
+            if (target.getParentFile() != null
+                    && target.getParentFile().equals(root)
+                    && target.getName().startsWith("personagem_")
+                    && target.isFile()) {
+                target.delete();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     private void showProject(JSONObject p) {
         JSONArray chapters = chapterArray(p);
         result.setText("PROJETO ABERTO\n\n" +
@@ -367,6 +498,14 @@ public class MangaActivity extends Activity {
             "PERSONAGENS\n" + p.optString("characters", "Não definidos.") +
             "\n\nIDEIA DA HISTÓRIA\n" + p.optString("idea", "") +
             "\n\nUse 'Ver / editar capítulos salvos' para consultar e alterar os capítulos.");
+        String imagePath = p.optString("character_image_path", "");
+        if (!imagePath.isEmpty() && new java.io.File(imagePath).isFile()) {
+            mangaImage.setImageBitmap(BitmapFactory.decodeFile(imagePath));
+            mangaImage.setVisibility(View.VISIBLE);
+        } else {
+            mangaImage.setImageDrawable(null);
+            mangaImage.setVisibility(View.GONE);
+        }
     }
 
     private void renameCurrentProject() {
